@@ -5,7 +5,7 @@ from typing import *
 import numpy as np
 from PIL import Image
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 from torchvision.transforms.functional import crop
 from torchvision.ops import box_convert
@@ -18,11 +18,12 @@ from .constants import VERTEBRA_NAMES
 class Target:
     keypoints: Tensor
     boxes: Tensor
-    names: List[str]
+    names: List[str] | str
     visual_grades: Tensor
     morphological_grades: Tensor
     labels: Tensor
     indices: Tensor
+    weights: Tensor
     id: Optional[str] = None
 
     def to(self, device: str) -> "Target":
@@ -30,33 +31,50 @@ class Target:
             keypoints=self.keypoints.to(device),
             boxes=self.boxes.to(device),
             names=self.names,
-            visual_grade=self.visual_grades.to(device),
-            morphological_grade=self.morphological_grades.to(device),
-            label=self.labels.to(device),
+            visual_grades=self.visual_grades.to(device),
+            morphological_grades=self.morphological_grades.to(device),
+            labels=self.labels.to(device),
+            weights=self.weights.to(device),
             indices=self.indices.to(device),
             id=self.id,
         )
+    
+    def to_dict(self) -> Dict[str, Tensor]:
+        return {
+            "keypoints": self.keypoints,
+            "boxes": self.boxes,
+            "names": self.names,
+            "visual_grades": self.visual_grades,
+            "morphological_grades": self.morphological_grades,
+            "labels": self.labels,
+            "weights": self.weights,
+            "indices": self.indices,
+            "id": self.id,
+        }
+
 
 @dataclass
 class Batch:
     x: Tensor
     y: List[Target]
+    original_sizes: List[Tuple[int, int]] = None
 
     def to(self, device: str) -> "Batch":
         return Batch(
             x=self.x.to(device),
+            original_sizes=self.original_sizes,
             y=[_.to(device) for _ in self.y],
         )
 
 @dataclass
 class Prediction:
     mu: Tensor
-    sigma: Tensor
+    sigma: Optional[Tensor] = None
 
     def to(self, device: str) -> "Prediction":
         return Prediction(
             mu=self.mu.to(device),
-            sigma=self.sigma.to(device),
+            sigma=self.sigma.to(device) if self.sigma is not None else None,
         )
     
 @dataclass
@@ -82,19 +100,21 @@ class Loss:
     
     def to_dict(self) -> Dict[str, Tensor]:
         return {
-            "bboxes": self.boxes.detach().cpu().item(),
-            "keypoints": self.keypoints.detach().cpu().item(),
-            "giou": self.giou.detach().cpu().item(),
-            "cross_entropy": self.cross_entropy.detach().cpu().item(),
-            "polynomial": self.polynomial.detach().cpu().item(),
-            "total": self.total.detach().cpu().item(),
+            "keypoints": self.keypoints,
+            "boxes": self.boxes,
+            "giou": self.giou,
+            "cross_entropy": self.cross_entropy,
+            "polynomial": self.polynomial,
+            "total": self.total
         }
 
 @dataclass
 class Output:
-    keypoints: Prediction
+    keypoints: Optional[Prediction] = None
     bboxes: Optional[Prediction] = None
     logits: Optional[Tensor] = None
+    labels: Optional[Tensor] = None
+    scores: Optional[Tensor] = None
 
 
     def to(self, device: str) -> "Output":
@@ -102,15 +122,35 @@ class Output:
             bboxes=self.bboxes.to(device),
             keypoints=self.keypoints.to(device),
             logits=self.logits.to(device),
+            labels=self.labels.to(device),
+            scores=self.scores.to(device),
         )
     
     def to_dict(self) -> Dict[str, Tensor]:
         return {
-            "bboxes": self.bboxes.mu if self.bboxes is not None else None,
-            "keypoints": self.keypoints.mu,
+            "keypoints": self.keypoints,
+            "boxes": self.bboxes,
             "logits": self.logits,
+            "labels": self.labels,
+            "scores": self.scores,
         }
 
+@dataclass
+class VertebraOutput:
+    keypoints: Optional[Prediction] = None
+    grade_logits: Optional[Tensor] = None
+    type_logits: Optional[Tensor] = None
+
+
+    def to(self, device: str) -> "Output":
+        return Output(
+            keypoints=self.keypoints.to(device),
+            grade_logits=self.grade_logits.to(device),
+            type_logits=self.type_logits.to(device),
+        )
+    
+    def to_dict(self) -> Dict[str, Tensor]:
+        return asdict(self)
 
 @dataclass
 class DXA:
@@ -288,7 +328,7 @@ class Bbox:
 
         bbox = self.to_numpy()
 
-        return box_convert(torch.Tensor(bbox), "xywh", format)
+        return box_convert(torch.Tensor(bbox), "xywh", format).numpy()
     
     def to_numpy(self) -> np.ndarray:
         return np.array([self.x, self.y, self.width, self.height], dtype=np.float32)
