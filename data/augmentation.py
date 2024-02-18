@@ -109,35 +109,15 @@ class Augmenter(nn.Module):
 
     def __init__(self, 
                  p: float,
-                 height: int, 
-                 width: int, 
-                 max_val: float, 
-                 fill_value: float = 0
+                 scale: float,
+                 max_val: float
                  ) -> "Augmenter":
         
         super().__init__()
 
-        self.max_val = max_val
-
-
-        self.model = K.AugmentationSequential(
-            K.Resize(width, side="short"),
-            K.RandomInvert(p=p),
-            K.RandomGaussianBlur((3, 3), (0.1, 2.0), p=p),
-            K.RandomHorizontalFlip(p=p),
-            K.RandomVerticalFlip(p=p),
-            K.RandomRotation(degrees=5.0, p=p),
-            K.RandomEqualize(p=p),
-            K.RandomSharpness(p=p),
-            # K.RandomErasing(scale=(0.02, 0.1), ratio=(0.3, 3.3), p=p),
-            K.PadTo((height, width), pad_value=fill_value),
-            data_keys=["image", "keypoints", "bbox_xyxy"],
-        )
-
-    def augment(self, image: Tensor, keypoints: Keypoints, bboxes: Boxes) -> Tuple[Tensor, Keypoints, Boxes]:
-
-        return self.model(image, keypoints, bboxes)
-
+        self.p          = p
+        self.scale      = scale
+        self.max_val    = max_val
 
     @torch.no_grad()
     def forward(self, image: np.ndarray, keypoints: Tensor, bboxes: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
@@ -145,28 +125,55 @@ class Augmenter(nn.Module):
         Performs augmentation on the images, keypoints and bounding boxes, using Kornia.
 
         Args: 
-            images: Tensor of shape (batch_size, 1, height, width)
-            keypoints: Tensor of shape (batch_size, n_keypoints, 2)
-            bboxes: Tensor of shape (batch_size, n_bboxes, 4)
+            images: Tensor of shape (1, height, width)
+            keypoints: Tensor of shape (n_keypoints, 2)
+            bboxes: Tensor of shape (n_bboxes, 4)
 
         Returns:
-            images: Tensor of shape (batch_size, 1, height, width)
-            keypoints: Tensor of shape (batch_size, n_keypoints, 2)
-            bboxes: Tensor of shape (batch_size, n_bboxes, 4)
+            images: Tensor of shape (height, width)
+            keypoints: Tensor of shape (n_keypoints, 2)
+            bboxes: Tensor of shape n_bboxes, 4)
         """
-        image_max = image.max().astype(np.float32)
-        max_val = torch.max(torch.tensor(self.max_val), torch.tensor(image_max)).numpy()
 
-        image = torch.from_numpy(image.copy() / max_val).type(keypoints.dtype)
+        
+        # image_max   = image.max().astype(np.float32)
+        # max_val     = torch.max(torch.tensor(self.max_val), torch.tensor(image_max)).numpy()
+
+        # image = torch.from_numpy(image.copy() / max_val).type(keypoints.dtype)
+
+        # Kornia expects (H, W) but we have (W, H), we need to transpose
+        # image = image
+
+        image_height, image_width = image.shape[-2:]
+
+        # Rescale
+        new_width   = int(image_width * self.scale)
+        new_height  = int(image_height * self.scale)
+
+        # Random height crop
+        height_crop_factor = torch.FloatTensor(1).uniform_(0.5, 1.0).item()
+
+
+        model = K.AugmentationSequential(
+            K.Resize((new_height, new_width), antialias=True),
+            K.RandomInvert(p=self.p),
+            K.RandomGaussianBlur((3, 3), (0.1, 2.0), p=self.p),
+            K.RandomHorizontalFlip(p=self.p),
+            K.RandomVerticalFlip(p=self.p),
+            K.RandomRotation(degrees=5.0, p=self.p),
+            K.RandomEqualize(p=self.p),
+            K.RandomSharpness(p=self.p),
+            # K.RandomCrop((int(new_height * height_crop_factor), new_width), p=self.p),
+            # K.RandomErasing(scale=(0.02, 0.1), ratio=(0.3, 3.3), p=self.p),
+            data_keys=["image", "keypoints", "bbox_xyxy"],
+        )
 
         # Transform to Kornia format
         keypoints   = Keypoints(keypoints)
-        bboxes      = Boxes.from_tensor(bboxes, "xyxy")
-
-        # print(image.dtype, keypoints.dtype, bboxes.dtype)
+        bboxes      = Boxes.from_tensor(bboxes.unsqueeze(0), "xyxy")
 
         # Augment
-        image, keypoints, bboxes = self.augment(image, keypoints, bboxes)
+        image, keypoints, bboxes = model(image, keypoints, bboxes)
 
         # Transform back to PyTorch format
         keypoints = keypoints.data
@@ -177,13 +184,11 @@ class Augmenter(nn.Module):
 
 def build_augmenter(
                  p: float,
-                 height: int, 
-                 width: int, 
-                 max_val: float, 
-                 fill_value: float = 0
-) -> Tuple[nn.Module, nn.Module]:
+                 scale: float,
+                 max_val: float
+                ) -> Tuple[nn.Module, nn.Module]:
     
-    return Augmenter(p, height, width, max_val, fill_value), Augmenter(0, height, width, max_val, fill_value)
+    return Augmenter(p, scale, max_val), Augmenter(0, scale, max_val)
     
 
     
