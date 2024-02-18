@@ -1,72 +1,26 @@
-from tasks.detection.backbones.realnvp.models import RealNVP
+from models.backbones.realnvp.models import RealNVP
 from torch import Tensor
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
-from torch.distributions import Normal, Laplace, Beta
+import torchmetrics
 
-from models.backbones.detr.util import box_ops
-from models.backbones.detr.util.misc import (nested_tensor_from_tensor_list,
-                       accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized)
+from typing import *
 
-from models.backbones.detr.models.segmentation import (dice_loss, sigmoid_focal_loss)
+from models.backbones.DINO.util import box_ops
+from models.backbones.DINO.util.misc import (accuracy, get_world_size, is_dist_avail_and_initialized)
 
-class Classifier(nn.Module):
-
-    def __init__(self, tolerance: float = 0.1) -> None:
-        super().__init__()
-
-        self.tolerance = tolerance
-
-    @torch.no_grad()
-    def forward(self, vertebrae: Tensor) -> Tensor:
-        """
-        Classify the type of the vertebra depending on its shape.
-
-        Args:
-            vertebrae (Tensor): Vertebra to classify, with anterior, middle and posterior points.
-            Shape: (B, 6, 2)
-
-        """
-        anterior    = vertebrae[:, 0:2, :]
-        middle      = vertebrae[:, 2:4, :]
-        posterior   = vertebrae[:, 4:6, :]
-
-        # Compute distances between points
-        ha = torch.linalg.norm(anterior[:,0,:] - anterior[:,1,:])
-        hp = torch.linalg.norm(posterior[:,0,:] - posterior[:,1,:])
-        hm = torch.linalg.norm(middle[:,0,:] - middle[:,1,:])
-
-        apr = ha / hp # Anterior/posterior ratio (not used)
-        mpr = hp / hm # Middle/posterior ratio
-        mar = ha / hm # Middle/anterior ratio
-
-        # Classify the vertebrae
-        normal  = (mpr - mar).abs() < self.tolerance
-        crush   = ((mpr > 1 + self.tolerance) & (mar < 1 - self.tolerance)) & ~normal
-        biconc  = ((mpr > 1 + self.tolerance) & (mar > 1 + self.tolerance)) & ~normal
-        wedge   = ((mpr < 1 - self.tolerance) & (mar > 1 + self.tolerance)) & ~normal
-
-        # Create the classification tensor
-        classification = torch.stack([crush , biconc, wedge, normal], dim=-1).float()
-
-        return classification
-
-
+from models.backbones.DINO.models.dino.dino import SetCriterion
 
 class PolynomialPenalty(nn.Module):
 
     def __init__(self, 
                  power: int = 3, 
-                 n_vertebrae: int = 13, 
-                 n_keypoints: int = 6, 
                  n_dims: int = 2) -> None:
         super().__init__()
 
         self.power = power
-        self.n_vertebrae = n_vertebrae
-        self.n_keypoints = n_keypoints
         self.n_dims = n_dims
 
 
@@ -77,7 +31,7 @@ class PolynomialPenalty(nn.Module):
         using least squares.
 
         Args:
-            vertebrae (Tensor): [B, ..., 2] tensor of vertebrae coordinates
+            vertebrae (Tensor): [B, ..., 4] tensor of vertebrae boxes
             power (int, optional): Degree of polynomial. Defaults to 3.
 
         Returns:
@@ -94,17 +48,14 @@ class PolynomialPenalty(nn.Module):
         return coeffs
 
     def forward(self, points: Tensor) -> Tensor:
+        """
+        Args:
+            points (Tensor): [B, 4] tensor of bounding boxes"""
 
-        # Assume the means are distributed along a 
-        # polynomial of degree "self.power"
-        means = points.reshape(-1, self.n_vertebrae, self.n_keypoints, self.n_dims).mean(dim=-2)
+        cx, cy, w, h = points.unbind(dim=-1)
 
-        # Add anchor points at the ends of the image
-        # points = torch.tensor([[[0, 0.5], [1, 0.5]]]).repeat(means.shape[0], 1, 1)
-        # means = torch.cat([means, points], dim=1)
-
-        y = means[:,:,0]
-        x = means[:,:,1]
+        x = cy
+        y = cx
 
         # Compute the polynomial coefficients
         coeffs = self.compute_polynomial_coefficients(x, y, self.power)
@@ -113,101 +64,191 @@ class PolynomialPenalty(nn.Module):
         poly = torch.stack([x**i for i in range(0, self.power+1)], dim=-1)
 
         # Compute the polynomial in the points
-        y_hat = torch.einsum("bik,bk->bi", poly, coeffs)
+        # y_hat = torch.einsum("bik,bk->bi", poly, coeffs)
+        y_hat  = poly @ coeffs
 
         # Compute the mean squared error
-        mse = (y_hat - y).square().mean()
+        mse = (y_hat - y).abs().mean()
 
         return mse
 
 
 class RLELoss(nn.Module):
 
-    def __init__(self, prior: str = "gaussian", custom: bool = True) -> None:
+    def __init__(self, n_keypoints: int = 6, n_dims: int = 2, prior: Literal["laplace", "gaussian"] = "laplace") -> None:
         
         super().__init__()
         self.eps = 1e-9
         self.flow = RealNVP()
         self.prior = prior
-        self.custom = custom
+        self.n_keypoints = n_keypoints
+        self.n_dims = n_dims
+
+        self.log_phi = torch.vmap(self.flow.log_prob, in_dims=1, out_dims=1, chunk_size=8)
 
     def forward(self, mu: Tensor, sigma: Tensor, x: Tensor) -> Tensor:
         """
         Args:
-            x_hat: (B*N, 2*K*D)
-            x: (B*N, K*D)
-            
-        Returns:
-            loss: (B, K, 2)
-        """
+            mu (Tensor): (B, K x 2) The predicted mean of the distribution
+            sigma (Tensor): (B, K x 2) The predicted standard deviation of the distribution
+            x (Tensor): (N, 2) The query point, or the ground truth point in the case of training
 
-        BN, KD = mu.shape
-        D = 2
+        Returns:
+            Tensor: The log-likelihood of the query point under the distribution
+        """
+        # B, KD = mu.shape
+        # D = 2
+        # K = KD // D
+        # x = x.reshape(-1, D)
+        # N = x.shape[0] 
+
+
+
+        mu, sigma, x = mu.reshape(-1, self.n_keypoints, self.n_dims), sigma.reshape(-1, self.n_keypoints, self.n_dims), x.reshape(-1, self.n_keypoints, self.n_dims)
 
         # Calculate the deviation from a sample x
-        error = (mu - x) / (sigma + self.eps) # (B*N, K*D)
+        error = (mu - x) / (sigma + self.eps) # (B x K, N, D)
+        log_phi = self.flow.log_prob(error.view(-1, self.n_dims)).view(-1, self.n_keypoints, 1)
+        log_sigma = torch.log(sigma).view(-1, self.n_keypoints, self.n_dims)
 
-        # (B*N, K*D)
-        log_phi = self.flow.log_prob(error.view(-1, D)).view(BN, -1, 1)
+        match self.prior:
+            case "laplace":
+                log_q = torch.log(2 * sigma) + torch.abs(error)
 
-        # (B*N, K*D)
-        if self.custom:
-            if self.prior == "gaussian":
+            case "gaussian":
                 log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
-            elif self.prior == "laplace":
-                log_q = torch.log(sigma * 2) + torch.abs(error)
-            else:
-                raise NotImplementedError
+
+            case _:
+                raise NotImplementedError("Prior not implemented")
             
-        else:
-            if self.prior == "gaussian":
-                log_q = Normal(mu, sigma).log_prob(x)
-            elif self.prior == "laplace":
-                log_q = Laplace(mu, sigma).log_prob(x)
-            elif self.prior == "beta":
-                alpha = 1 + sigma * mu
-                beta  = 1 + sigma * (1 - mu)
-                log_q = Beta(alpha, beta).log_prob(x)
-            else:
-                raise NotImplementedError
+        nll = log_sigma - log_phi + log_q
+        nll /= len(nll)
+        nll = nll.sum()
 
-        sigma = sigma.view(BN, KD//D, D, )
-        log_q = log_q.view(BN, KD//D, D, )
+        return nll
 
-        # (B*N, ) by broadcasting (possibly incorrect)
-        loss = torch.log(sigma) - log_phi + log_q
+        # Calculate the log-likelihood from the flow
+        # log_phi = self.log_phi(error).view(-1, len(x), 1).repeat(1, 1, D) # (B x K, N, D)
+        # log_phi = self.flow.log_prob(error.view(-1, 2))#.view(-1, N, 1).repeat(1, 1, D)
+        
+        # log_sigma = torch.log(sigma)#.repeat(1, len(x), 1) # (B x K, N, D)
 
-        return loss.mean()
+        # match self.prior:
+        #     case "laplace":
+        #         log_q = torch.log(2 * sigma) + torch.abs(error) # (B x K, N, D)
+        #     case "gaussian":
+        #         log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
+        #     case _:
+        #         raise NotImplementedError("Prior not implemented")
+
+        # nll = log_sigma.mean() - log_phi.mean() + log_q.mean() # (B x K, N, D)
+
+        # # nll = nll.view(B*N, K, D) # (B x N, K)
+        # return nll
+
+
+        # BN, KD = mu.shape
+        # D = 2
+        # N = x.shape[0]
+        # mu = mu.reshape(-1, 1, x.shape[1])
+        # sigma = sigma.reshape(-1, 1, x.shape[1])
+        # # Calculate the deviation from a sample x
+        # error = (mu - x) / (sigma + self.eps) # (B*N, K*D)
+
+        # # (B*N, K*D)
+        # log_phi = self.flow.log_prob(error.view(-1, D)).view(BN, -1, 1)
+
+        # # (B*N, K*D)
+
+        # if self.prior == "gaussian":
+        #     log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
+        # elif self.prior == "laplace":
+        #     log_q = torch.log(sigma * 2) + torch.abs(error)
+
+        # print(log_q.shape, log_phi.shape, sigma.shape)
+        # log_sigma = torch.log(sigma).view(-1, 1, 2).sum(-1, keepdim=True).repeat(KD//D, 1, 1)
+        # log_q     = log_q.view(-1, 1, 2).sum(-1, keepdim=True)
+
+        # # sigma = sigma.view(BN, KD//D, D, )
+        # # log_q = log_q.view(BN, KD//D, D, )
+
+        # # (B*N, ) by broadcasting (possibly incorrect)
+        # loss = log_sigma - log_phi + log_q
+
+        # return loss.mean()
+
+        # return nll
     
 
-class VertebraCriterion(nn.Module):
+class SetCriterion(SetCriterion):
+    """ This class computes the loss for Conditional DETR.
+    The process happens in two steps:
+        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
+        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """
+    def __init__(self, num_classes, matcher, weight_dict, focal_alpha, losses):
+        """ Create the criterion.
+        Parameters:
+            num_classes: number of object categories, omitting the special no-object category
+            matcher: module able to compute a matching between targets and proposals
+            weight_dict: dict containing as key the names of the losses and as values their relative weight.
+            losses: list of all the losses to be applied. See get_loss for list of available losses.
+            focal_alpha: alpha in Focal Loss
+        """
+        super().__init__(num_classes, matcher, weight_dict, focal_alpha, losses)
 
-    def __init__(self, args) -> None:
-        super().__init__()
+        self.polynomial_penalty = PolynomialPenalty(power=3, n_dims=2)
 
-        self.keypoint_loss          = RLELoss()
-        self.polynomial_penalty     = PolynomialPenalty(power=args.power)
+    def loss_boxes(self, outputs, targets, indices, num_boxes):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_boxes' in outputs
+        idx = self._get_src_permutation_idx(indices)
+        src_boxes = outputs['pred_boxes'][idx]
+        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_weights = torch.cat([t["weights"][J] for t, (_, J) in zip(targets, indices)]).unsqueeze(-1)
 
-    def forward(self, mu: Tensor, sigma: Tensor, x: Tensor) -> Tensor:
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none') 
 
-        loss = self.keypoint_loss(mu, sigma, x) + \
-               self.mean_deviation_penalty(mu) 
+        polynomial_penalty = self.polynomial_penalty(src_boxes)
 
-        return loss
+        losses = {}
+        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        losses['loss_polynomial'] = polynomial_penalty
+        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+            box_ops.box_cxcywh_to_xyxy(src_boxes),
+            box_ops.box_cxcywh_to_xyxy(target_boxes))) 
+        
+        loss_giou = loss_giou * target_weights.squeeze(-1)
+        losses['loss_giou'] = loss_giou.sum() / num_boxes
+
+        # calculate the x,y and h,w loss
+        with torch.no_grad():
+            losses['loss_xy'] = loss_bbox[..., :2].sum() / num_boxes
+            losses['loss_hw'] = loss_bbox[..., 2:].sum() / num_boxes
+
+        return losses
+
     
-
-import torch
-import torch.nn.functional as F
-from torch import nn
-
-
-class SetCriterion(nn.Module):
+class OldSetCriterion(nn.Module):
     """ This class computes the loss for DETR.
     The process happens in two steps:
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, 
+                 num_classes, 
+                 matcher, 
+                 weight_dict, 
+                 eos_coef, 
+                 losses, 
+                 tolerance: float = 0.2, 
+                 n_vertebrae: int = 13,
+                 n_dims: int = 2, 
+                 missing_weight: float = 1e-3,
+                 class_weights: List[float] = []):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -222,31 +263,66 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
-        empty_weight = torch.ones(self.num_classes + 1)
-        empty_weight[-1] = self.eos_coef
+
+        if len(class_weights) == 0:
+            empty_weight = torch.ones(self.num_classes + 1)
+            empty_weight[-1] = self.eos_coef
+        else:
+            empty_weight = torch.zeros(len(class_weights) + 1)
+            empty_weight[-1] = self.eos_coef
+            empty_weight[:-1] = torch.tensor(class_weights)
+
         self.eps = 1e-9
         self.register_buffer('empty_weight', empty_weight)
-        self.flow = RealNVP()
+        
+        self.polynomial_penalty = PolynomialPenalty(power=3, n_dims=n_dims)
 
-    def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+        self.n_dims = n_dims
+        self.n_vertebrae = n_vertebrae
+        self.tolerance = tolerance
+        self.missing_weight = missing_weight
+    
+        # Metrics
+        self.auroc      = torchmetrics.AUROC(task="multiclass", num_classes=num_classes+1) #if num_classes > 1 else torchmetrics.AUROC(task="multiclass", num_classes=num_classes+1)
+        self.accuracy   = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes+1) #if num_classes > 1 else torchmetrics.Accuracy(task="binary")
+        self.f1_score   = torchmetrics.F1Score(task="multiclass", num_classes=num_classes+1) #if num_classes > 1 else torchmetrics.F1Score(task="binary")
+
+    def loss_labels(self, outputs: Dict[str, Tensor], targets: List[Dict[str, Tensor]], indices, num_boxes, log=True):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
 
+        # idx = self._get_src_permutation_idx(indices) # Tuple of (original index, permuted index)
+        # target_classes_o    = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        # target_indicators   = torch.cat([t["indices"][J] for t, (_, J) in zip(targets, indices)])
+        # # target_classes_o    = target_classes_o[target_indicators]
+
+        # # target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        # target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+        #                             dtype=torch.int64, device=src_logits.device)
+        # target_classes[idx] = target_classes_o
+
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
+
         loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
-        losses = {'loss_ce': loss_ce}
+        losses = {'loss_ce': self.weight_dict['loss_ce'] * loss_ce}
+
+        # Log metrics
+        losses["auroc"]     = self.auroc(src_logits.transpose(1, 2).detach(), target_classes.detach())
+        losses["accuracy"]  = self.accuracy(src_logits.transpose(1, 2).detach(), target_classes.detach())
+        losses["f1_score"]  = self.f1_score(src_logits.transpose(1, 2).detach(), target_classes.detach())
 
         if log:
             # TODO this should probably be a separate loss, not hacked in this one here
             losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
         return losses
+
 
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
@@ -271,53 +347,26 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_indicators   = torch.cat([t["indices"][J] for t, (_, J) in zip(targets, indices)])
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
 
-        # Implement the RLE modifications (assuming Laplace distribution)
-        src_sigma = outputs['pred_sigma_boxes'][idx]
-        error = loss_bbox / (src_sigma + self.eps)
-        log_phi = self.flow.log_prob(error.view(-1, 2)).view(-1, 2).repeat(1, 2)
-        log_q = torch.log(src_sigma * 2) + error.square() / 2
-        # print(log_phi.shape, log_q.shape, src_sigma.shape, error.shape)
-        loss_bbox = torch.log(src_sigma) - log_phi + log_q
+        polynomial_penalty = self.polynomial_penalty(src_boxes)
+
+        # Weight loss per sample if not present
+        loss_bbox[~target_indicators] = self.missing_weight*loss_bbox[~target_indicators]
 
         losses = {}
-        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        losses['loss_polynomial'] = self.weight_dict['loss_polynomial'] * polynomial_penalty
+        losses['loss_bbox'] = self.weight_dict['loss_bbox'] * loss_bbox.sum() / num_boxes
 
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
             box_ops.box_cxcywh_to_xyxy(src_boxes),
             box_ops.box_cxcywh_to_xyxy(target_boxes)))
-        losses['loss_giou'] = loss_giou.sum() / num_boxes
+        losses['loss_giou'] = self.weight_dict['loss_giou'] * loss_giou.sum() / num_boxes
         
         return losses
     
-    def loss_keypoints(self, outputs, targets, indices, num_boxes):
-        """Compute the losses related to the keypoints, the L1 regression loss and the GIoU loss
-           targets dicts must contain the key "keypoints" containing a tensor of dim [nb_target_boxes, 6]
-           The target keypoints are expected in format (center_x, center_y, w, h), normalized by the image size.
-        """
-        assert 'pred_keypoints' in outputs
-        idx = self._get_src_permutation_idx(indices)
-        src_keypoints = outputs['pred_keypoints'][idx]
-        target_keypoints = torch.cat([t['keypoints'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-
-        loss_keypoints = F.l1_loss(src_keypoints, target_keypoints, reduction='none')
-
-        # Implement the RLE modifications (assuming Laplace distribution)
-        src_sigma = outputs['pred_sigma_keypoints'][idx]
-        error = loss_keypoints / (src_sigma + self.eps)
-        log_phi = self.flow.log_prob(error.view(-1, 2)).view(-1, 6).repeat(1, 2)
-        log_q = torch.log(src_sigma * 2) + error.square() / 2
-        # print(log_phi.shape, log_q.shape, src_sigma.shape, error.shape)
-        loss_keypoints = torch.log(src_sigma) - log_phi + log_q
-
-    
-
-        losses = {}
-        losses['loss_keypoints'] = loss_keypoints.sum() / num_boxes
-
-        return losses
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -336,7 +385,6 @@ class SetCriterion(nn.Module):
             'labels': self.loss_labels,
             'cardinality': self.loss_cardinality,
             'boxes': self.loss_boxes,
-            'keypoints': self.loss_keypoints,
             # 'masks': self.loss_masks
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
