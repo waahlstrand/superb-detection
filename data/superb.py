@@ -125,9 +125,6 @@ class SuperbDataset(PatientDataset):
         # Get the patient directories
         patient_dirs    = [Path(p) for p in config.dir.values]
 
-        print(len(patient_dirs))
-        print(len(config))
-
         patients_root   = patient_dirs[0].parent
 
         return cls(patients_root, patient_dirs=patient_dirs, **kwargs)
@@ -260,7 +257,7 @@ class SuperbDataModule(L.LightningDataModule):
         print("Vertebrae class frequencies:")
         for i, (v, c, w) in enumerate(zip(vals, counts, self.class_weights)):
             print(f"Class: {v.item()}\t Counts: {c.item()}\t Weight: {w.item()}")
-
+        
     def setup(self, stage: Stage) -> None:
 
         keypoints = torch.cat([target.keypoints for image, target in self.data], dim=0).to("cpu")
