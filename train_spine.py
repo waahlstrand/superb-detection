@@ -8,9 +8,9 @@ from lightning.pytorch.callbacks import ModelCheckpoint, RichModelSummary, RichP
 from lightning import Trainer
 
 from data.superb import build_datamodule
-from models.spine import build_model
+from models.spine.models import build_model
 from argparse import ArgumentParser
-from models.callbacks import SpinePlotCallback
+from models.spine.callbacks import SpinePlotCallback
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 

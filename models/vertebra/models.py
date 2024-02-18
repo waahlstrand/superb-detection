@@ -4,8 +4,8 @@ from torch import nn
 import lightning as L
 from torch.optim.optimizer import Optimizer
 from torchvision.models import resnet18, resnet50, swin_v2_t, Swin_V2_T_Weights, ResNet18_Weights, ResNet50_Weights
-from models.classifiers import FuzzyWedgeClassifier
-from models.criterion import RLELoss
+from models.vertebra.classifiers import FuzzyWedgeClassifier
+from models.vertebra.criterion import RLELoss
 from torch.nn.functional import mse_loss, l1_loss
 from data.types import *
 import torchmetrics as tm

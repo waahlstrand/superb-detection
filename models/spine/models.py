@@ -14,7 +14,7 @@ from models.base import Detector
 from models.backbones.DINO.util.misc import NestedTensor
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
-from models.dino import build_dino
+from models.spine.dino import build_dino
 
 def build_model(args, class_weights: List[float] = None):
 

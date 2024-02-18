@@ -1,5 +1,5 @@
 from lightning.pytorch.cli import LightningCLI
-from models.vertebra import SingleVertebraClassifier
+from models.vertebra.models import SingleVertebraClassifier
 from data.vertebra import VertebraDataModule
 import torch.multiprocessing
 import torch

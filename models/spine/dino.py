@@ -12,8 +12,8 @@ from models.backbones.DINO.util.misc import (NestedTensor, nested_tensor_from_te
                        is_dist_avail_and_initialized, inverse_sigmoid)
 
 from models.backbones.DINO.models.dino.backbone import build_backbone
-from models.matcher import build_matcher
-from models.criterion import SetCriterion
+from models.spine.matcher import build_matcher
+from models.spine.criterion import SetCriterion
 from models.backbones.DINO.models.dino.segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss)
 from models.backbones.DINO.models.dino.deformable_transformer import build_deformable_transformer
