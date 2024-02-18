@@ -160,6 +160,7 @@ cython_debug/
 #.idea/
 
 # Remove all data files
+logs/
 *.yml
 *.yaml
 *.csv
@@ -167,3 +168,6 @@ cython_debug/
 *.json
 *.pkl
 *.pth
+*.ckpt
+*.png
+*.out
