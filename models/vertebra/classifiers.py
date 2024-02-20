@@ -164,23 +164,44 @@ class FuzzyClassifier(nn.Module):
 class VertebraClassifier(nn.Module):
 
     def __init__(self, 
-                 tolerances: List[float] = [0.2, 0.25, 0.4],
-                 thresholds: Dict[Literal["apr", "mpr", "mar"], float] = {"apr": 1.0, "mpr": 1.0, "mar": 1.0}                 
+                 tolerances: Union[List[float],Dict[Literal["apr", "mpr", "mar"], List[float]]] = {
+                        "apr": [0.2, 0.25, 0.4],
+                        "mpr": [0.2, 0.25, 0.4],
+                        "mar": [0.2, 0.25, 0.4]
+                 },
+                 thresholds: Dict[Literal["apr", "mpr", "mar"], float] = {
+                     "apr": 1.0, "mpr": 1.0, "mar": 1.0
+                },
+                 trainable: bool = False
                  ) -> None:
         super().__init__()
 
-        self.tolerances = tolerances
-        self.thresholds = thresholds
+        # self.tolerances = tolerances
+        # self.thresholds = thresholds
 
-    def within(self, apr: Tensor, mpr: Tensor, mar: Tensor, tolerance: int = 1) -> Tensor:
+        # Make trainable
+        if trainable:
 
-        apr_pos_thresh = self.thresholds["apr"]*(1-tolerance)
-        mpr_pos_thresh = self.thresholds["mpr"]*(1-tolerance)
-        mar_pos_thresh = self.thresholds["mar"]*(1-tolerance)
+            self.tolerances = nn.ParameterDict({
+                k: nn.Parameter(torch.tensor(v)) for k, v in tolerances.items()
+            })
 
-        apr_neg_thresh = self.thresholds["apr"]*(1+tolerance)
-        mpr_neg_thresh = self.thresholds["mpr"]*(1+tolerance)
-        mar_neg_thresh = self.thresholds["mar"]*(1+tolerance)
+            # self.tolerances = nn.Parameter(torch.tensor(tolerances))
+            self.thresholds = nn.ParameterDict({
+                k: nn.Parameter(torch.tensor(v)) for k, v in thresholds.items()
+            })
+
+
+
+    def within(self, apr: Tensor, mpr: Tensor, mar: Tensor, tolerance_idx: int = 1) -> Tensor:
+
+        apr_pos_thresh = self.thresholds["apr"]*(1-self.tolerances["apr"][tolerance_idx])
+        mpr_pos_thresh = self.thresholds["mpr"]*(1-self.tolerances["mpr"][tolerance_idx])
+        mar_pos_thresh = self.thresholds["mar"]*(1-self.tolerances["mar"][tolerance_idx])
+
+        apr_neg_thresh = self.thresholds["apr"]*(1+self.tolerances["apr"][tolerance_idx])
+        mpr_neg_thresh = self.thresholds["mpr"]*(1+self.tolerances["mpr"][tolerance_idx])
+        mar_neg_thresh = self.thresholds["mar"]*(1+self.tolerances["mar"][tolerance_idx])
 
         is_within, ind = torch.stack([
             self.geq(apr, apr_pos_thresh), 
@@ -201,12 +222,9 @@ class VertebraClassifier(nn.Module):
 
         return F.sigmoid((value - x))
 
-    def forward(self, vertebrae: Tensor, tolerances: List[float] = None) -> VertebraOutput:
+    def forward(self, vertebrae: Tensor) -> VertebraOutput:
 
         vertebrae   = vertebrae.reshape(-1, 6, 2)
-
-        tolerances   = self.tolerances if tolerances is None else tolerances
-        threshold    = self.thresholds
 
         posterior   = vertebrae[:, 0:2, :]
         middle      = vertebrae[:, 2:4, :]
@@ -221,23 +239,23 @@ class VertebraClassifier(nn.Module):
         mar = hm / ha
 
         # Can be replaced with 1 for optimal performance
-        apr_pos = self.geq(apr, threshold["apr"])
-        mpr_pos = self.geq(mpr, threshold["mpr"])
-        mar_pos = self.geq(mar, threshold["mar"])
+        apr_pos = self.geq(apr, self.thresholds["apr"])
+        mpr_pos = self.geq(mpr, self.thresholds["mpr"])
+        mar_pos = self.geq(mar, self.thresholds["mar"])
 
-        mpr_neg = self.leq(mpr, threshold["apr"])
-        mar_neg = self.leq(mar, threshold["mpr"])
-        apr_neg = self.leq(apr, threshold["mar"])
+        mpr_neg = self.leq(mpr, self.thresholds["apr"])
+        mar_neg = self.leq(mar, self.thresholds["mpr"])
+        apr_neg = self.leq(apr, self.thresholds["mar"])
 
-        normal = self.within(apr, mpr, mar, tolerance=tolerances[0]) # e.g. within 0.8, 1.2
+        normal = self.within(apr, mpr, mar, tolerance_idx=0) # e.g. within 0.8, 1.2
         
         grad_1, ind = torch.stack([
-            self.within(apr, mpr, mar, tolerance=tolerances[1]), # e.g. within  0.75, 1.25
+            self.within(apr, mpr, mar, tolerance_idx=1), # e.g. within  0.75, 1.25
             1-normal
         ], dim=1).min(dim=1)
 
         grad_2, ind = torch.stack([
-            self.within(apr, mpr, mar, tolerance=tolerances[2]), # e.g.  within 0.6, 1.4
+            self.within(apr, mpr, mar, tolerance_idx=2), # e.g.  within 0.6, 1.4
             1-grad_1
         ], dim=1).min(dim=1)
 
@@ -280,11 +298,18 @@ class VertebraClassifier(nn.Module):
     
 class FuzzyWedgeClassifier(VertebraClassifier):
 
-    def __init__(self, 
-                 tolerances: List[float] = [0.2, 0.25, 0.4],
-                 thresholds: Dict[Literal["apr", "mpr", "mar"], float] = {"apr": 1.0, "mpr": 1.0, "mar": 1.0}   
+    def __init__(self,
+                 tolerances: Union[List[float],Dict[Literal["apr", "mpr", "mar"], List[float]]] = {
+                        "apr": [0.2, 0.25, 0.4],
+                        "mpr": [0.2, 0.25, 0.4],
+                        "mar": [0.2, 0.25, 0.4]
+                 },
+                 thresholds: Dict[Literal["apr", "mpr", "mar"], float] = {
+                     "apr": 1.0, "mpr": 1.0, "mar": 1.0
+                },
+                 trainable: bool = False 
                  ) -> None:
-        super().__init__(tolerances=tolerances, thresholds=thresholds)
+        super().__init__(tolerances=tolerances, thresholds=thresholds, trainable=trainable)
 
     def forward(self, vertebrae: Tensor) -> VertebraOutput:
 
