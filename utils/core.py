@@ -13,6 +13,12 @@ def vertebra_to_pairs(vertebra: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     Args:
         vertebra: Tensor of shape (N, 2)
     """
+    # A vertebra has the following points:
+        # up -- um -- ua
+        # lp -- lm -- la
+
+    # Algorithm 1: Only works if the rotation is not too large
+    # Sort by x and y and make pairs, assuming up and lm have the lowest x-values
 
     # Get indexes of the two points with smallest x
     idx = torch.argsort(vertebra[:, 0])
@@ -34,8 +40,68 @@ def vertebra_to_pairs(vertebra: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     middle = middle[middle[:, 1].argsort()]
     anterior = anterior[anterior[:, 1].argsort()]
 
-    return posterior, middle, anterior
+    # Safeguard
+    ha = (anterior[0,:] - anterior[1,:]).norm(dim=-1)
+    hp = (posterior[0,:] - posterior[1,:]).norm(dim=-1)
+    hm = (middle[0,:] - middle[1,:]).norm(dim=-1)
 
+    mpr = hm / hp
+    mar = hm / ha
+
+    # Symptoms of too large rotation
+
+    if mpr > 2 and mar > 2:
+
+        
+        # Get leftmost and rightmost point indices
+        idx = torch.argsort(vertebra[:, 0])
+        leftmost = idx[0]
+        rightmost = idx[-1]
+
+        # Sort remaining points by y
+        remaining = torch.tensor([i for i in range(6) if i not in [leftmost, rightmost]])
+        remaining = vertebra[remaining]
+        remaining = remaining[remaining[:, 1].argsort()]
+
+        # Get two top and bottom points
+        top = remaining[-2:]
+        bottom = remaining[:2]
+
+        # Sort by x
+        top = top[top[:, 0].argsort()]
+        bottom = bottom[bottom[:, 0].argsort()]
+
+        left_top = top[0]
+        right_top = top[1]
+        left_bottom = bottom[0]
+        right_bottom = bottom[1]
+
+        leftmost = vertebra[leftmost]
+        rightmost = vertebra[rightmost]
+
+        # Get the two points with the largest x
+        if left_top[1] > right_top[1]:
+            
+            up = left_top
+            lp = leftmost
+            um = right_top
+            lm = left_bottom
+            ua = rightmost
+            la = right_bottom
+        else:
+            up = leftmost
+            lp = left_bottom
+            um = left_top
+            lm = right_bottom
+            ua = right_top
+            la = rightmost
+
+        posterior = torch.stack([up, lp])
+        middle = torch.stack([um, lm])
+        anterior = torch.stack([ua, la])
+
+
+    return posterior, middle, anterior
 def as_ordered(vertebra: Tensor) -> Tensor:
 
     posterior, middle, anterior = vertebra_to_pairs(vertebra)
