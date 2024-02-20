@@ -4,6 +4,38 @@ import torch.nn.functional as F
 from torch import Tensor
 from data.types import *
 
+class VertebraParameters(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+
+    def forward(self, vertebrae: Tensor):
+
+        vertebrae   = vertebrae.reshape(-1, 6, 2)
+
+        posterior   = vertebrae[:, 0:2, :]
+        middle      = vertebrae[:, 2:4, :]
+        anterior    = vertebrae[:, 4:6, :]
+
+        ha = (anterior[:,0,:] - anterior[:,1,:]).norm(dim=-1)
+        hp = (posterior[:,0,:] - posterior[:,1,:]).norm(dim=-1)
+        hm = (middle[:,0,:] - middle[:,1,:]).norm(dim=-1)
+
+        apr = ha / hp
+        mpr = hm / hp
+        mar = hm / ha
+
+        return {
+            "ha": ha,
+            "hp": hp,
+            "hm": hm,
+            "apr": apr,
+            "mpr": mpr,
+            "mar": mar,
+            
+        }
+
 class CrispClassifier(nn.Module):
 
     def __init__(self) -> None:
@@ -123,42 +155,9 @@ class FuzzyClassifier(nn.Module):
             1-biconcave
             ], dim=1).min(dim=1)
 
-
         type_logits = torch.stack([normal, wedge, biconcave, crush], dim=-1)
 
         return type_logits
-
-
-class VertebraParameters(nn.Module):
-
-    def __init__(self):
-
-        super().__init__()
-
-    def forward(self, vertebrae: Tensor):
-
-        vertebrae   = vertebrae.reshape(-1, 6, 2)
-
-        posterior   = vertebrae[:, 0:2, :]
-        middle      = vertebrae[:, 2:4, :]
-        anterior    = vertebrae[:, 4:6, :]
-
-        ha = (anterior[:,0,:] - anterior[:,1,:]).norm(dim=-1)
-        hp = (posterior[:,0,:] - posterior[:,1,:]).norm(dim=-1)
-        hm = (middle[:,0,:] - middle[:,1,:]).norm(dim=-1)
-
-        apr = ha / hp
-        mpr = hm / hp
-        mar = hm / ha
-
-        return {
-            "ha": ha,
-            "hp": hp,
-            "hm": hm,
-            "apr": apr,
-            "mpr": mpr,
-            "mar": mar
-        }
         
     
 
