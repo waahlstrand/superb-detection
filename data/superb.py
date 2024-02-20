@@ -181,7 +181,7 @@ class SuperbDataset(PatientDataset):
 class SuperbDataModule(L.LightningDataModule):
 
     def __init__(self, 
-                 config: Path,
+                 source: Path,
                  fold: int = 0,
                  batch_size: int = 1,
                  train_split: float = 0.8,
@@ -189,18 +189,19 @@ class SuperbDataModule(L.LightningDataModule):
                  bbox_expansion: float = 0.1,
                  bbox_format: str = 'cxcywh',
                  bbox_normalization: bool = False,
+                 p_augmentation: float = 0.5,
+                 scale: float = 0.5,
                  n_classes: int = 4,
                  n_keypoints: int = 6,
                  n_workers: int = 8,
-                 transforms: List[nn.Module] = [None, None],
                  n_neighbors: int = 10,
                  missing_weight: float = 1e-4,
-                 filter: Callable[[Patient], bool] = lambda patient: True
+                 filter: str = "not_any"
                  ) -> None:
         
         super().__init__()
 
-        self.config         = config
+        self.source         = source
         self.fold           = fold
         self.batch_size     = batch_size
         self.train_split    = train_split
@@ -212,6 +213,14 @@ class SuperbDataModule(L.LightningDataModule):
         self.n_classes      = n_classes
         self.n_keypoints    = n_keypoints
         self.missing_weight = missing_weight
+
+        if filter == "not_any":
+            filter = lambda p: not any([len(v.coordinates)==0 for v in p.vertebrae])
+        elif filter == "not_all":
+            filter = lambda p: not all([len(v.coordinates)==0 for v in p.vertebrae])
+        else:
+            raise NotImplementedError(f"Filter {filter} not implemented")
+
 
         self.train_idxs = []
         self.val_idxs = []
@@ -227,14 +236,18 @@ class SuperbDataModule(L.LightningDataModule):
             "n_keypoints"
         )
 
-        self.train_transforms, self.val_transforms = transforms
+        self.train_transforms, self.val_transforms = build_augmenter(
+        p=p_augmentation,
+        scale=scale,
+        max_val=SuperbStatistics.MAX,
+    )
 
         self.filter = filter
         self.n_neighbors = n_neighbors
 
         # Compute class weights
         self.data = SuperbDataset.from_fold(
-            self.config, 
+            self.source, 
             fold=self.fold, 
             split="train", 
             bbox_expansion=self.bbox_expansion, 
@@ -270,7 +283,7 @@ class SuperbDataModule(L.LightningDataModule):
         if stage == Stage.FIT:
 
             self.train_data = SuperbDataset.from_fold(
-                self.config, 
+                self.source, 
                 fold=self.fold, 
                 split="train", 
                 bbox_expansion=self.bbox_expansion,
@@ -285,7 +298,7 @@ class SuperbDataModule(L.LightningDataModule):
             )
 
             self.val_data = SuperbDataset.from_fold(
-                self.config, 
+                self.source, 
                 fold=self.fold, 
                 split="val", 
                 bbox_expansion=self.bbox_expansion, 
@@ -306,7 +319,7 @@ class SuperbDataModule(L.LightningDataModule):
         elif stage == Stage.TEST:
 
             self.test_data = SuperbDataset.from_fold(
-                self.config, 
+                self.source, 
                 fold=self.fold, 
                 split="holdout", 
                 bbox_expansion=self.bbox_expansion, 
