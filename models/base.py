@@ -26,7 +26,8 @@ class Detector(L.LightningModule):
     def __init__(self, 
                 lr: float = 1e-4,
                 lr_backbone: float = 1e-5,
-                weight_decay: float = 1e-4
+                weight_decay: float = 1e-4,
+                batch_size: int = 8
                  ) -> None:
         
         super().__init__()
@@ -34,6 +35,7 @@ class Detector(L.LightningModule):
         self.lr = lr
         self.lr_backbone = lr_backbone
         self.weight_decay = weight_decay
+        self.batch_size = batch_size
 
         self.metrics  = nn.ModuleDict({
             name: self.build_metrics() for name in ["train_stage", "val_stage", "test_stage"]
@@ -54,7 +56,7 @@ class Detector(L.LightningModule):
     
     def training_step(self, batch: Batch, batch_idx: int) -> Tensor:
 
-        loss, output = self.step(batch, batch_idx, name="train_stage", prog_bar=False, on_step=True, on_epoch=True)
+        loss, output = self.step(batch, batch_idx, name="train_stage", batch_size=self.batch_size, prog_bar=False, on_step=True, on_epoch=True)
         
         return {
             "loss": loss,
@@ -64,7 +66,7 @@ class Detector(L.LightningModule):
     
     def validation_step(self, batch: Batch, batch_idx: int) -> Tensor:
 
-       loss, output = self.step(batch, batch_idx, name="val_stage", prog_bar=False, on_step=False, on_epoch=True)
+       loss, output = self.step(batch, batch_idx, name="val_stage", batch_size=self.batch_size, prog_bar=False, on_step=False, on_epoch=True)
        
        return {
             "loss": loss,
@@ -78,7 +80,7 @@ class Detector(L.LightningModule):
     
     def test_step(self, batch: Batch, batch_idx: int) -> Tensor:
 
-       loss, output = self.step(batch, batch_idx, name="test_stage", prog_bar=False, on_step=False, on_epoch=True)
+       loss, output = self.step(batch, batch_idx, name="test_stage", batch_size=self.batch_size, prog_bar=False, on_step=False, on_epoch=True)
 
        x, y = batch.x, batch.y
        sizes  = batch.original_sizes
