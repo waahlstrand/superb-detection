@@ -184,6 +184,7 @@ class SingleVertebraClassifier(L.LightningModule):
                        type_weights: Optional[List[float]] = None,
                        model_name: Literal["resnet18", "swin_v2_t", "resnet50"] = "resnet18",
                        model_weights: Optional[str] = None,
+                       trainable_classifier: bool = False,
                        ):
         
         super().__init__()
@@ -202,6 +203,8 @@ class SingleVertebraClassifier(L.LightningModule):
         self.grade_weights = torch.FloatTensor(grade_weights) if grade_weights is not None else None
         self.type_weights  = torch.FloatTensor(type_weights) if type_weights is not None else None
         self.model_name = model_name
+        self.model_weights = model_weights
+        self.trainable_classifier = trainable_classifier
 
         self.save_hyperparameters()
 
@@ -216,14 +219,14 @@ class SingleVertebraClassifier(L.LightningModule):
             n_grades=self.n_grades,
             n_keypoints=self.n_keypoints, 
             model=self.model_name,
-            model_weights=model_weights
+            model_weights=model_weights,
             )
 
         # print("Compiling model...")
         # self.model = torch.compile(self.model, mode="reduce-overhead")
         # print("Done.")
 
-        self.classifier             = FuzzyWedgeClassifier(tolerances=self.tolerances, thresholds=self.thresholds)
+        self.classifier             = FuzzyWedgeClassifier(tolerances=self.tolerances, thresholds=self.thresholds, trainable=trainable_classifier)
         self.rle                    = RLELoss(prior=self.prior)
         self.grade_cross_entropy    = nn.CrossEntropyLoss(weight=self.grade_weights)
         self.type_cross_entropy     = nn.CrossEntropyLoss(weight=self.type_weights)

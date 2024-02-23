@@ -41,7 +41,6 @@ def build_dino(args):
     # if args.dataset_file == 'vanke':
     #     num_classes = 51
     num_classes = args.num_classes
-    device = torch.device(args.device)
 
     backbone = build_backbone(args)
 
@@ -144,7 +143,6 @@ def build_dino(args):
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              focal_alpha=args.focal_alpha, losses=losses,
                              )
-    criterion.to(device)
     postprocessors = {'bbox': PostProcess(num_select=args.num_select, nms_iou_threshold=args.nms_iou_threshold)}
     if args.masks:
         postprocessors['segm'] = PostProcessSegm()

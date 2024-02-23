@@ -13,6 +13,10 @@ from dataclasses import asdict
 from models.base import Detector
 from models.backbones.DINO.util.misc import NestedTensor
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
+from torchvision.models import resnet50
+from models.spine.adapter import DINO
+from argparse import Namespace
 
 from models.spine.dino import build_dino
 
@@ -27,32 +31,25 @@ def build_model(args, class_weights: List[float] = None):
     
     return model
 
-class SpineDINO(Detector):
+class SpineImageClassifier(L.LightningModule):
 
-    def __init__(self, 
-                 args, 
-                 n_classes: int = 4, 
-                 n_keypoints: int = 6, 
-                 n_dim: int = 2, 
-                 n_channels: int = 3,
-                 class_weights: List[float] = None,
-                 **kwargs) -> None:
+    def __init__(self, n_classes: int) -> None:
+        super().__init__()
 
-        self.n_keypoints = n_keypoints
-        self.n_dim = n_dim
-        self.n_classes = n_classes
-        self.n_channels = n_channels
-        self.class_weights = class_weights
 
-        num_queries = args.num_queries
+class SpineFasterRCNN(Detector):
+
+    pass
+
+class SpineDINO(DINO):
+
+    def __init__(self, **kwargs) -> None:
+
+        super().__init__(**kwargs)
+
+        args = Namespace(**kwargs)
         
-        args.num_queries = 100
-        args.num_classes = n_classes
-        # detector, criterion, postprocessors = build_detr(args, class_weights=class_weights)
-
         model, criterion, postprocessors = build_dino(args)
-
-        super().__init__(args.lr, args.lr_backbone, args.weight_decay, **kwargs)
 
         self.model = model
         self.criterion = criterion
@@ -107,3 +104,4 @@ class SpineDINO(Detector):
         return ModuleDict({
             "map": MeanAveragePrecision(box_format="xyxy", iou_type="bbox")
         })
+    
