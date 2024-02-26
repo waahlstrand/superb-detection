@@ -172,7 +172,8 @@ class SingleVertebraClassifier(L.LightningModule):
     def __init__(self, n_types: int = 3,
                        n_grades: int = 4, 
                        n_keypoints: int = 6, 
-                       tolerances: List[float] = [0.2, 0.25, 0.4],
+                    #    tolerances: List[float] = [0.2, 0.25, 0.4],
+                       tolerances: Dict[Literal["apr", "mpr", "mar"], List[float]] = {"apr": [0.2, 0.25, 0.4], "mpr": [0.2, 0.25, 0.4], "mar": [0.2, 0.25, 0.4]},
                        thresholds: Dict[Literal["apr", "mpr", "mar"], float] = {"apr": 1.0, "mpr": 1.0, "mar": 1.0},
                        prior: Literal["gaussian", "laplace"] = "gaussian",
                        p_augmentation: float = 0.5,
@@ -413,8 +414,11 @@ class SingleVertebraClassifier(L.LightningModule):
         val_types_pred = torch.cat(val_types_pred, dim=0).to(self.device)
         val_grades_pred = torch.cat(val_grades_pred, dim=0).to(self.device)
             
-        self.on_any_test_end(val_types_true, val_types_pred, name="val_stage", target="types", labels=type_labels)
-        self.on_any_test_end(val_grades_true, val_grades_pred, name="val_stage", target="grades", labels=grade_labels)
+        try:
+            self.on_any_test_end(val_types_true, val_types_pred, name="val_stage", target="types", labels=type_labels)
+            self.on_any_test_end(val_grades_true, val_grades_pred, name="val_stage", target="grades", labels=grade_labels)
+        except Exception as e:
+            pass
 
         self.validation_true = []
         self.validation_pred = []
@@ -432,9 +436,12 @@ class SingleVertebraClassifier(L.LightningModule):
         test_types_pred, test_grades_pred = zip(*self.test_pred)
         test_types_pred = torch.cat(test_types_pred, dim=0).to(self.device)
         test_grades_pred = torch.cat(test_grades_pred, dim=0).to(self.device)
-            
-        self.on_any_test_end(test_types_true, test_types_pred, name=f"test_stage", target="types", labels=type_labels)
-        self.on_any_test_end(test_grades_true, test_grades_pred, name=f"test_stage", target="grades", labels=grade_labels)
+        
+        try:
+            self.on_any_test_end(test_types_true, test_types_pred, name=f"test_stage", target="types", labels=type_labels)
+            self.on_any_test_end(test_grades_true, test_grades_pred, name=f"test_stage", target="grades", labels=grade_labels)
+        except Exception as e:
+            pass
 
         self.test_true = []
         self.test_pred = []
@@ -492,7 +499,7 @@ class SingleVertebraClassifier(L.LightningModule):
             preds_thresh   = (preds_grouped > youden).astype(int)
 
             # Compute confusion matrix
-            cm = sklearn.metrics.confusion_matrix(trues_binary, preds_thresh)
+            cm = sklearn.metrics.confusion_matrix(trues_binary, preds_thresh, labels=[0,1])
 
             # Compute metrics
             # Sensitivity, specificity, precision, f1-score
@@ -501,16 +508,20 @@ class SingleVertebraClassifier(L.LightningModule):
             precision   = cm[1, 1] / (cm[1, 1] + cm[0, 1])
             accuracy    = (cm[0, 0] + cm[1, 1]) / cm.sum()
 
+            # Get the prevalence of the positive class
+            prevalence = trues_binary.sum()  
+
             f1_score    = 2 * (precision * sensitivity) / (precision + sensitivity)
 
             # Log metrics
-            self.log(f"{target}/{group_name}/auc", auc, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/youden", youden, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/sensitivity", sensitivity, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/specificity", specificity, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/precision", precision, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/accuracy", accuracy, prog_bar=False, on_epoch=True, on_step=False)
-            self.log(f"{target}/{group_name}/f1_score", f1_score, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/auc", auc, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/youden", youden, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/sensitivity", sensitivity, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/specificity", specificity, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/precision", precision, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/accuracy", accuracy, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/f1_score", f1_score, prog_bar=False, on_epoch=True, on_step=False)
+            self.log(f"{name}/{target}/{group_name}/prevalence", prevalence, prog_bar=False, on_epoch=True, on_step=False)
 
         return {
                 "auc": torch.tensor(auc),

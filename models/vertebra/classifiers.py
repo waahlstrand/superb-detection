@@ -176,9 +176,6 @@ class VertebraClassifier(nn.Module):
                  ) -> None:
         super().__init__()
 
-        # self.tolerances = tolerances
-        # self.thresholds = thresholds
-
         # Make trainable
         if trainable:
 
@@ -190,6 +187,10 @@ class VertebraClassifier(nn.Module):
             self.thresholds = nn.ParameterDict({
                 k: nn.Parameter(torch.tensor(v)) for k, v in thresholds.items()
             })
+
+        else:
+            self.tolerances = tolerances
+            self.thresholds = thresholds
 
 
 
