@@ -4,6 +4,7 @@ import numpy as np
 from typing import *
 from pathlib import Path
 import pandas as pd
+from torch import Tensor
 
 def grouped_classes(
         y_true: np.ndarray,
@@ -137,3 +138,47 @@ def confusion_matrix(
         np.ndarray: Confusion matrix
     """
     return sklearn.metrics.confusion_matrix(y_true, y_pred, **kwargs)
+
+
+def classification_metrics(trues: Tensor, preds: Tensor, all_groups: List[Tuple[str, Tuple[List[int], List[int]]]]):
+
+    trues = trues.squeeze().cpu().numpy()
+    preds = preds.cpu().numpy()
+        
+    for group_name, groups in all_groups:
+        # Compute ROC curve for a multi-class classification problem using the One-vs-Rest (OvR) strategy
+        trues_binary, preds_grouped = grouped_classes(trues, preds, groups, n_classes=preds.shape[-1])
+
+        roc = grouped_roc_ovr(trues, preds, groups, n_classes=preds.shape[-1])
+            
+        # Compute relevant metrics
+        auc     = roc["roc_auc"]
+        youden  = roc["youden_threshold"]
+        preds_thresh   = (preds_grouped > youden).astype(int)
+
+        # Compute confusion matrix
+        cm = sklearn.metrics.confusion_matrix(trues_binary, preds_thresh, labels=[0,1])
+
+        # Compute metrics
+        # Sensitivity, specificity, precision, f1-score
+        sensitivity = cm[1, 1] / (cm[1, 1] + cm[1, 0])
+        specificity = cm[0, 0] / (cm[0, 0] + cm[0, 1])
+        precision   = cm[1, 1] / (cm[1, 1] + cm[0, 1])
+        accuracy    = (cm[0, 0] + cm[1, 1]) / cm.sum()
+
+        # Get the prevalence of the positive class
+        prevalence = trues_binary.sum()  
+
+        f1_score    = 2 * (precision * sensitivity) / (precision + sensitivity)
+
+        yield {
+            "group_name": group_name,
+            "auc": auc,
+            "youden": youden,
+            "sensitivity": sensitivity,
+            "specificity": specificity,
+            "precision": precision,
+            "accuracy": accuracy,
+            "prevalence": prevalence,
+            "f1_score": f1_score
+        }
