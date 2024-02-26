@@ -40,26 +40,27 @@ class VertebraPlotCallback(L.Callback):
 
     def on_test_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, outputs: Dict[str, Tensor], batch: Any, batch_idx: int, *args, **kwargs) -> None:
 
-        images = outputs["images"].detach().cpu() if outputs is not None else []
+        if "log" in trainer.logger.experiment.__dict__:
+            images = outputs["images"].detach().cpu() if outputs is not None else []
 
-        for i, image in enumerate(images):
-            f, ax = plt.subplots(1, 1, squeeze=True, dpi=300)
-            self.plot_image(
-                image[0], 
-                outputs["keypoints"][i], 
-                outputs["grades"][i],
-                outputs["types"][i],
-                outputs["pred_keypoints"][i],
-                outputs["pred_keypoints_sigma"][i],
-                outputs["pred_grades"][i],
-                outputs["pred_types"][i],
-                outputs.get("loss_per_pixel", None), 
-                ax)
-            trainer.logger.experiment.log({
-                f"test_stage/plot_image": wandb.Image(f, caption=f"Test plot image")
-            })
+            for i, image in enumerate(images):
+                f, ax = plt.subplots(1, 1, squeeze=True, dpi=300)
+                self.plot_image(
+                    image[0], 
+                    outputs["keypoints"][i], 
+                    outputs["grades"][i],
+                    outputs["types"][i],
+                    outputs["pred_keypoints"][i],
+                    outputs["pred_keypoints_sigma"][i],
+                    outputs["pred_grades"][i],
+                    outputs["pred_types"][i],
+                    outputs.get("loss_per_pixel", None), 
+                    ax)
+                trainer.logger.experiment.log({
+                    f"test_stage/plot_image": wandb.Image(f, caption=f"Test plot image")
+                })
 
-            plt.close(f)
+                plt.close(f)
 
     def plot_image(self, 
                    image: Tensor, 

@@ -298,16 +298,7 @@ class VertebraDataModule(L.LightningDataModule):
                 
         elif stage == "test":
 
-            self.test_datasets = []
-            for name, condition in [
-                ("all", lambda x: x),  
-                ("compressions", lambda x: x["visual_grade"] > 0), 
-                ("only mild", lambda x: x["visual_grade"] == 1), 
-                ("moderate and severe", lambda x: x["visual_grade"] > 1), 
-                ("only moderate", lambda x: x["visual_grade"] == 2),
-                ("only severe", lambda x: x["visual_grade"] == 3)]:
-
-                dataset = VertebraDataset.from_fold(self.height, self.width,
+            self.test_data = VertebraDataset.from_fold(self.height, self.width,
                                             config=self.source,
                                             fold=self.fold,
                                             split="holdout",
@@ -318,12 +309,9 @@ class VertebraDataModule(L.LightningDataModule):
                                             bbox_format="xyxy",
                                             bbox_jitter=self.bbox_jitter,
                                             n_classes=self.n_classes,
-                                            filter=condition
                                         )
-                
-                self.test_datasets.append(dataset)
-                
-                print(f"Test ({name}):\t n_vertebrae={len(dataset)},\t n_patients={len(dataset.superb)}")
+                                
+            print(f"Test:\t n_vertebrae={len(self.test_data)},\t n_patients={len(self.test_data.superb)}")
             
 
     def train_dataloader(self) -> DataLoader:
@@ -333,7 +321,8 @@ class VertebraDataModule(L.LightningDataModule):
        return DataLoader(self.val_data, batch_size=self.batch_size, num_workers=self.n_workers, pin_memory=True, collate_fn=self.collate)
     
     def test_dataloader(self) -> DataLoader:
-        return [DataLoader(dataset, batch_size=self.batch_size, num_workers=self.n_workers, pin_memory=True, collate_fn=self.collate) for dataset in self.test_datasets]
+        # return [DataLoader(dataset, batch_size=self.batch_size, num_workers=self.n_workers, pin_memory=True, collate_fn=self.collate) for dataset in self.test_datasets]
+        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.n_workers, pin_memory=True, collate_fn=self.collate)
     
     def collate(self, batch: List[Tuple[Tensor, Target]]) -> Batch:
         x, y = zip(*batch)
@@ -343,5 +332,3 @@ class VertebraDataModule(L.LightningDataModule):
             y=y,
         )
     
-
-

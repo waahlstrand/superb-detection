@@ -1,7 +1,7 @@
 from typing import *
 
 from torch.nn.modules import ModuleDict
-from data.types import Batch, Output, Loss, Prediction
+from data.types import Batch, Output, Loss, Prediction, Target
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -17,7 +17,8 @@ from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
 from torchvision.models import resnet50
 from models.spine.adapter import DINO
 from argparse import Namespace
-
+import sklearn.metrics
+from utils.evaluate import *
 from models.spine.dino import build_dino
 
 def build_model(args, class_weights: List[float] = None):
@@ -30,11 +31,6 @@ def build_model(args, class_weights: List[float] = None):
         raise NotImplementedError
     
     return model
-
-class SpineImageClassifier(L.LightningModule):
-
-    def __init__(self, n_classes: int) -> None:
-        super().__init__()
 
 
 class SpineFasterRCNN(Detector):

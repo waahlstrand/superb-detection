@@ -338,18 +338,33 @@ class VertebraClassifier(nn.Module):
                  ) -> None:
         super().__init__()
 
-        self.tolerances = tolerances
-        self.thresholds = thresholds
-
-    def within(self, apr: Tensor, mpr: Tensor, mar: Tensor, tolerance: int = 1) -> Tensor:
+        # Make trainable
+        if trainable:
 
         apr_pos_thresh = self.thresholds["apr"]*(1-tolerance)
         mpr_pos_thresh = self.thresholds["mpr"]*(1-tolerance)
         mar_pos_thresh = self.thresholds["mar"]*(1-tolerance)
 
-        apr_neg_thresh = self.thresholds["apr"]*(1+tolerance)
-        mpr_neg_thresh = self.thresholds["mpr"]*(1+tolerance)
-        mar_neg_thresh = self.thresholds["mar"]*(1+tolerance)
+            # self.tolerances = nn.Parameter(torch.tensor(tolerances))
+            self.thresholds = nn.ParameterDict({
+                k: nn.Parameter(torch.tensor(v)) for k, v in thresholds.items()
+            })
+
+        else:
+            self.tolerances = tolerances
+            self.thresholds = thresholds
+
+
+
+    def within(self, apr: Tensor, mpr: Tensor, mar: Tensor, tolerance_idx: int = 1) -> Tensor:
+
+        apr_pos_thresh = self.thresholds["apr"]*(1-self.tolerances["apr"][tolerance_idx])
+        mpr_pos_thresh = self.thresholds["mpr"]*(1-self.tolerances["mpr"][tolerance_idx])
+        mar_pos_thresh = self.thresholds["mar"]*(1-self.tolerances["mar"][tolerance_idx])
+
+        apr_neg_thresh = self.thresholds["apr"]*(1+self.tolerances["apr"][tolerance_idx])
+        mpr_neg_thresh = self.thresholds["mpr"]*(1+self.tolerances["mpr"][tolerance_idx])
+        mar_neg_thresh = self.thresholds["mar"]*(1+self.tolerances["mar"][tolerance_idx])
 
         is_within, ind = torch.stack([
             self.geq(apr, apr_pos_thresh), 
