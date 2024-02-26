@@ -160,6 +160,7 @@ class FuzzyClassifier(nn.Module):
         return type_logits
         
     
+   
 
 class VertebraClassifier(nn.Module):
 

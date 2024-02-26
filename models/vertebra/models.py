@@ -358,7 +358,7 @@ class SingleVertebraClassifier(L.LightningModule):
         output = self(image) # VertebraOutputs (mu, sigma) for each keypoint (B, K, 2), (B, K, 2)
 
         # Get the negative log-likelihood of the points
-        loss = self.rle(output.keypoints.mu, output.keypoints.sigma, points) # (B x H x W, K)
+        loss = self.rle.inference(output.keypoints.mu, output.keypoints.sigma, points) # (B x H x W, K)
         
         # Reshape the loss to the original image shape
         loss = loss.reshape(image.shape[0], -1, image.shape[-2], image.shape[-1]) # (B, K, H, W)
@@ -402,6 +402,15 @@ class SingleVertebraClassifier(L.LightningModule):
         return output
 
     def on_validation_epoch_end(self) -> None:
+
+        # Log classifier thresholds
+        for k, v in self.classifier.tolerances.items():
+            for name, val in (("mild", 0), ("moderate", 1), ("severe", 2)):
+                self.log(f"tolerance/{k}/{name}", v[val].detach().item(), prog_bar=False, on_epoch=True, on_step=False)
+
+        # Log classifier tolerances
+        for k, v in self.classifier.thresholds.items():
+            self.log(f"threshold/{k}", v.detach().item(), prog_bar=False, on_epoch=True, on_step=False)
 
         type_labels = ["normal", "wedge", "biconcave"]
         grade_labels = ["normal", "grade 1", "grade 2", "grade 3"]
