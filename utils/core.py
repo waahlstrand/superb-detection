@@ -50,7 +50,7 @@ def vertebra_to_pairs(vertebra: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
 
     # Symptoms of too large rotation
 
-    if mpr > 2 and mar > 2:
+    if (mpr > 2 and mar > 2) or (mpr > 0.7 and mar < 0.55):
 
         
         # Get leftmost and rightmost point indices

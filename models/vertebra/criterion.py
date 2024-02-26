@@ -60,25 +60,33 @@ class RLELoss(nn.Module):
         nll = nll.sum()
 
         return nll
+    
+    @torch.no_grad()
+    def inference(self, mu: Tensor, sigma: Tensor, x: Tensor) -> Tensor:
 
         # Calculate the log-likelihood from the flow
-        # log_phi = self.log_phi(error).view(-1, len(x), 1).repeat(1, 1, D) # (B x K, N, D)
-        # log_phi = self.flow.log_prob(error.view(-1, 2))#.view(-1, N, 1).repeat(1, 1, D)
+        mu, sigma, x = mu.reshape(-1, self.n_keypoints, self.n_dims), sigma.reshape(-1, self.n_keypoints, self.n_dims), x.reshape(-1, self.n_dims)
+
+        error = (mu - x) / (sigma + self.eps) # (B x K, N, D)
+        log_phi = self.log_phi(error).view(-1, len(x), 1).repeat(1, 1, 2) # (B x K, N, D)
+        log_phi = self.flow.log_prob(error.view(-1, 2))#.view(-1, N, 1).repeat(1, 1, D)
         
-        # log_sigma = torch.log(sigma)#.repeat(1, len(x), 1) # (B x K, N, D)
+        log_sigma = torch.log(sigma)#.repeat(1, len(x), 1) # (B x K, N, D)
 
-        # match self.prior:
-        #     case "laplace":
-        #         log_q = torch.log(2 * sigma) + torch.abs(error) # (B x K, N, D)
-        #     case "gaussian":
-        #         log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
-        #     case _:
-        #         raise NotImplementedError("Prior not implemented")
+        match self.prior:
+            case "laplace":
+                log_q = torch.log(2 * sigma) + torch.abs(error) # (B x K, N, D)
+            case "gaussian":
+                log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
+            case _:
+                raise NotImplementedError("Prior not implemented")
 
-        # nll = log_sigma.mean() - log_phi.mean() + log_q.mean() # (B x K, N, D)
+        nll = log_sigma - log_phi + log_q # (B x K, N, D)
 
-        # # nll = nll.view(B*N, K, D) # (B x N, K)
-        # return nll
+        nll /= len(nll)
+
+        # nll = nll.view(B*N, K, D) # (B x N, K)
+        return nll
 
 
         # BN, KD = mu.shape
