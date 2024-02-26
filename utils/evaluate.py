@@ -20,10 +20,13 @@ def roc_ovr(
     tpr = dict()
     thresholds = dict()
     roc_auc = dict()
+    classes = dict()
     for i in range(n_classes):
         fpr[i], tpr[i], thresholds[i] = sklearn.metrics.roc_curve(y_true_binary[:, i], y_pred[:, i])
         roc_auc[i] = sklearn.metrics.auc(fpr[i], tpr[i])
+        
 
     if path is not None:
+        df = pd.DataFrame()
 
 
