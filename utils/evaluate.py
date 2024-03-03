@@ -5,6 +5,8 @@ from typing import *
 from pathlib import Path
 import pandas as pd
 from torch import Tensor
+import torch
+from models.vertebra.classifiers import VertebraParameters
 
 def grouped_classes(
         y_true: np.ndarray,
@@ -182,3 +184,50 @@ def classification_metrics(trues: Tensor, preds: Tensor, all_groups: List[Tuple[
             "prevalence": prevalence,
             "f1_score": f1_score
         }
+
+def sample_model_likelihood(model, image, n_samples=1000) -> Tuple[Tensor, Tensor]:
+
+    likelihood, xx, yy = model.get_likelihood(image)
+    likelihood = likelihood.cpu().numpy()
+    xx = xx.cpu().numpy()
+    yy = yy.cpu().numpy()
+
+    X, Y = [], []
+
+    # Loop over keypoints
+    for i in range(likelihood.shape[1]):
+        l = likelihood[0, i, :, :]
+        sample = np.random.choice(
+            a = np.arange(0, len(l.flatten())), 
+            size = n_samples, 
+            p = l.flatten(), 
+            replace=True
+            )
+        
+        sample_x_idx, sample_y_idx = np.unravel_index(sample, l.shape)
+        sample_x, sample_y = xx[sample_x_idx, sample_y_idx], yy[sample_x_idx, sample_y_idx]
+
+        X.append(sample_x)
+        Y.append(sample_y)
+
+    # Concatenate into shapes (n_keypoints, n_samples)
+    X = torch.cat(X, dim=0).reshape(-1, n_samples)
+    Y = torch.cat(Y, dim=0).reshape(-1, n_samples)
+
+    return X, Y
+
+def format_keypoints_for_random_forest(keypoints: Tensor) -> np.ndarray:
+
+    vp = VertebraParameters()
+    params = vp(keypoints) # Dict[str, Tensor]
+
+    X = torch.stack([v for k, v in params.items()], dim=1).cpu().numpy()
+
+    return X
+
+    
+
+    
+
+
+
