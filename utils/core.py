@@ -223,8 +223,8 @@ def patient_to_target(
             
             # Get auxiliary information
             label = int(vertebra.typ) if vertebra.typ is not None else 0
-            visual_grade = int(vertebra.grad_visuell) if vertebra.grad_visuell is not None else -1
-            morph_grade  = int(vertebra.grad_morf) if vertebra.grad_morf is not None else -1
+            visual_grade = int(vertebra.grad_visuell) if vertebra.grad_visuell is not None else 0
+            morph_grade  = int(vertebra.grad_morf) if vertebra.grad_morf is not None else 0
             name = vertebra.name 
             present = True
 
@@ -238,8 +238,10 @@ def patient_to_target(
 
             # Get auxiliary information
             label = 0
-            visual_grade = -1
-            morph_grade = -1
+            # visual_grade = -1
+            visual_grade = 0
+            # morph_grade = -1
+            morph_grade = 0
             name = vertebra.name
             present = False
 
@@ -251,6 +253,9 @@ def patient_to_target(
         morphological_grades.append(morph_grade)
         names.append(name)
         indices[VERTEBRA_NAMES.index(name)] = present
+
+    if len(patient.vertebrae.annotations) > 0:
+        keypoints = [ann.to_list() for ann in patient.vertebrae.annotations]
 
     # Convert to tensors
     keypoints = torch.tensor(np.asarray(keypoints), dtype=torch.float32)
@@ -264,6 +269,7 @@ def patient_to_target(
         keypoints=keypoints,
         boxes=bboxes,
         labels=labels,
+        types=labels,
         visual_grades=visual_grades,
         morphological_grades=morphological_grades,
         names=names,
