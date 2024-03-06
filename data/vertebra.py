@@ -169,6 +169,7 @@ class VertebraDataset(SuperbDataset):
         visual_grade    = target.visual_grades[vertebra_idx].unsqueeze(0) # (1, 1)
         morphological_grade = target.morphological_grades[vertebra_idx].unsqueeze(0) # (1, 1)
         weight         = target.weights[vertebra_idx].unsqueeze(0) # (1, 1)
+        types           = target.types[vertebra_idx].unsqueeze(0) # (1, 1)
 
         # Align keypoints to bounding box
         keypoints = keypoints.reshape(bounding_box.shape[0], -1, 2) # (1, 6, 2)
@@ -202,6 +203,7 @@ class VertebraDataset(SuperbDataset):
             names=name,
             visual_grades=visual_grade,
             morphological_grades=morphological_grade,
+            types=types,
             indices=target.indices,
             weights=weight,
             id=target.id,

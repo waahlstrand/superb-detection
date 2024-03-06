@@ -143,8 +143,15 @@ class SuperbDataset(PatientDataset):
         # Modify labels to accommadate for the different number of classes
         if self.n_classes == 3:
             target.labels[target.labels == 3] = 1
+            target.types[target.types == 3] = 1
+
+
+        elif self.n_classes == 4:
+            target.labels = target.visual_grades # hack
+
         elif self.n_classes == 1:
             target.labels = torch.zeros_like(target.labels)
+            target.types[target.types == 3] = 1
         else:
             raise ValueError("Number of classes must be either 1 or 3")
         

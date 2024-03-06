@@ -22,6 +22,7 @@ class Target:
     visual_grades: Tensor
     morphological_grades: Tensor
     labels: Tensor
+    types: Tensor
     indices: Tensor
     weights: Tensor
     id: Optional[str] = None
@@ -33,6 +34,7 @@ class Target:
             names=self.names,
             visual_grades=self.visual_grades.to(device),
             morphological_grades=self.morphological_grades.to(device),
+            types=self.types.to(device),
             labels=self.labels.to(device),
             weights=self.weights.to(device),
             indices=self.indices.to(device),
@@ -46,6 +48,7 @@ class Target:
             "names": self.names,
             "visual_grades": self.visual_grades,
             "morphological_grades": self.morphological_grades,
+            "types": self.types,
             "labels": self.labels,
             "weights": self.weights,
             "indices": self.indices,
