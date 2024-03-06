@@ -34,7 +34,7 @@ class RealNVP(nn.Module):
     @property
     def prior(self) -> distributions.Distribution:
         """The prior distribution."""
-        return distributions.MultivariateNormal(self.loc, self.cov)
+        return distributions.MultivariateNormal(self.loc, self.cov, validate_args=False)
 
     def __init__(self):
         super(RealNVP, self).__init__()
