@@ -18,7 +18,7 @@ class RLELoss(nn.Module):
         self.n_keypoints = n_keypoints
         self.n_dims = n_dims
 
-        self.log_phi = torch.vmap(self.flow.log_prob, in_dims=1, out_dims=1, chunk_size=8)
+        self.log_phi = torch.vmap(self.flow.log_prob, in_dims=0, out_dims=0, chunk_size=512)
 
     def forward(self, mu: Tensor, sigma: Tensor, x: Tensor) -> Tensor:
         """
@@ -30,14 +30,7 @@ class RLELoss(nn.Module):
         Returns:
             Tensor: The log-likelihood of the query point under the distribution
         """
-        # B, KD = mu.shape
-        # D = 2
-        # K = KD // D
-        # x = x.reshape(-1, D)
-        # N = x.shape[0] 
-
-
-
+        
         mu, sigma, x = mu.reshape(-1, self.n_keypoints, self.n_dims), sigma.reshape(-1, self.n_keypoints, self.n_dims), x.reshape(-1, self.n_keypoints, self.n_dims)
 
         # Calculate the deviation from a sample x
@@ -63,15 +56,30 @@ class RLELoss(nn.Module):
     
     @torch.no_grad()
     def inference(self, mu: Tensor, sigma: Tensor, x: Tensor) -> Tensor:
+        """
+        Calculate the log-likelihood of a query point under the distribution
+        
+        Args:
+            mu (Tensor): (B, K x 2) The predicted mean of the distribution
+            sigma (Tensor): (B, K x 2) The predicted standard deviation of the distribution
+            x (Tensor): (N x N, 2) The query point, or the ground truth point in the case of training
+
+        Returns:
+            Tensor: The log-likelihood of the query point under the distribution (B, K, N, N)
+        """
 
         # Calculate the log-likelihood from the flow
-        mu, sigma, x = mu.reshape(-1, self.n_keypoints, self.n_dims), sigma.reshape(-1, self.n_keypoints, self.n_dims), x.reshape(-1, self.n_dims)
+        n_points    = int(math.sqrt(x.shape[0]))
+        mu          = mu.reshape(-1, self.n_keypoints, 1, self.n_dims)
+        sigma       = sigma.reshape(-1, self.n_keypoints, 1, self.n_dims)
+        x           = x.reshape(-1, self.n_dims)
 
-        error = (mu - x) / (sigma + self.eps) # (B x K, N, D)
-        log_phi = self.log_phi(error).view(-1, len(x), 1).repeat(1, 1, 2) # (B x K, N, D)
-        log_phi = self.flow.log_prob(error.view(-1, 2))#.view(-1, N, 1).repeat(1, 1, D)
+        error = (mu - x) / (sigma + self.eps) 
+
+        # Compute the log probability of the error under the flow
+        log_phi = self.log_phi(error.view(-1, self.n_keypoints, self.n_dims)).view(-1, self.n_keypoints, n_points)
         
-        log_sigma = torch.log(sigma)#.repeat(1, len(x), 1) # (B x K, N, D)
+        log_sigma = torch.log(sigma)
 
         match self.prior:
             case "laplace":
@@ -80,44 +88,13 @@ class RLELoss(nn.Module):
                 log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
             case _:
                 raise NotImplementedError("Prior not implemented")
+            
 
-        nll = log_sigma - log_phi + log_q # (B x K, N, D)
+        log_phi = log_phi.view(-1, self.n_keypoints, n_points ** 2)
+        log_sigma = log_sigma.sum(-1).repeat(1, 1, n_points ** 2)
+        log_q = log_q.sum(-1).view(-1, self.n_keypoints, n_points ** 2)
 
-        nll /= len(nll)
+        nll = log_sigma - log_phi + log_q 
+        nll = nll.reshape(-1, self.n_keypoints, n_points, n_points)
 
-        # nll = nll.view(B*N, K, D) # (B x N, K)
         return nll
-
-
-        # BN, KD = mu.shape
-        # D = 2
-        # N = x.shape[0]
-        # mu = mu.reshape(-1, 1, x.shape[1])
-        # sigma = sigma.reshape(-1, 1, x.shape[1])
-        # # Calculate the deviation from a sample x
-        # error = (mu - x) / (sigma + self.eps) # (B*N, K*D)
-
-        # # (B*N, K*D)
-        # log_phi = self.flow.log_prob(error.view(-1, D)).view(BN, -1, 1)
-
-        # # (B*N, K*D)
-
-        # if self.prior == "gaussian":
-        #     log_q = torch.log(sigma * math.sqrt(2 * math.pi)) + 0.5 * error**2
-        # elif self.prior == "laplace":
-        #     log_q = torch.log(sigma * 2) + torch.abs(error)
-
-        # print(log_q.shape, log_phi.shape, sigma.shape)
-        # log_sigma = torch.log(sigma).view(-1, 1, 2).sum(-1, keepdim=True).repeat(KD//D, 1, 1)
-        # log_q     = log_q.view(-1, 1, 2).sum(-1, keepdim=True)
-
-        # # sigma = sigma.view(BN, KD//D, D, )
-        # # log_q = log_q.view(BN, KD//D, D, )
-
-        # # (B*N, ) by broadcasting (possibly incorrect)
-        # loss = log_sigma - log_phi + log_q
-
-        # return loss.mean()
-
-        # return nll
-    

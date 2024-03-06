@@ -258,10 +258,13 @@ class VertebraClassifier(nn.Module):
 
         grad_2, ind = torch.stack([
             self.within(apr, mpr, mar, tolerance_idx=2), # e.g.  within 0.6, 1.4
+            1-normal,
             1-grad_1
         ], dim=1).min(dim=1)
 
         grad_3, ind = torch.stack([
+            1-normal,
+            1-grad_1,
             1-grad_2
         ], dim=1).min(dim=1)
 

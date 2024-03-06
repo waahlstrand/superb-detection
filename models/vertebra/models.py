@@ -17,6 +17,7 @@ import wandb
 import matplotlib.pyplot as plt
 import sklearn.metrics
 from utils.evaluate import *
+from utils.core import transparent_cmap
 
 class Augmenter(nn.Module):
 
@@ -326,7 +327,6 @@ class SingleVertebraClassifier(L.LightningModule):
         self.log(f"{name}/distance", distance, **kwargs)
         self.log(f"{name}/std", std, **kwargs)
 
-
         return {
             "loss": loss,
             "images": x,
@@ -346,25 +346,140 @@ class SingleVertebraClassifier(L.LightningModule):
     def forward(self, x) -> VertebraOutput:
         return self.model(x)
     
+    def naive_sample(self, images: Tensor, n_samples: int = 1000) -> Tuple[np.ndarray]:
 
-    def get_uncertainty(self, image: Tensor) -> Tensor:
+
+        likelihood, xx, yy = self.get_likelihood(images)
+        images      = images.cpu().numpy()
+        likelihood  = likelihood.cpu().numpy()
+        xx          = xx.cpu().numpy()
+        yy          = yy.cpu().numpy()
+
+        points = []
+        for k in range(self.n_keypoints):
+            A = np.random.uniform(0, 1, size=(n_samples, *likelihood[:,k,:,:].shape))
+
+            # Sample the likelihood of the points
+            samples = (A < likelihood[:,k,:,:]).astype(int)
+            sample_idxs = np.argwhere(samples)
+
+            # Get the x and y coordinates of the samples
+            sample_x_idx, sample_y_idx = sample_idxs[:, 1], sample_idxs[:, 2]
+            sample_x, sample_y = xx[sample_x_idx, sample_y_idx], yy[sample_x_idx, sample_y_idx]
+
+            points.append(np.stack([sample_x, sample_y], axis=1))
+        
+        return np.stack(points, axis=1)
+
+       
+
+    
+    def sample_multiple(self, images: Tensor, n_samples: int = 1000, chunk_size: int = 64) -> Tuple[Tensor, Tensor]:
+        """
+        Sample the likelihood of the keypoints from the model.
+        
+        Args:
+            image (Tensor): The image to sample from (B, C, H, W)
+            n_samples (int): The number of samples to draw
+        
+        Returns:
+            Tuple[Tensor, Tensor]: The x and y coordinates of the samples
+        """
+        # points = []
+        # for image in images:
+        #     ps = self.sample(image, n_samples=n_samples)
+        #     points.append(ps)
+
+        
+        # return torch.stack(points, dim=0)
+        sampling = torch.vmap(lambda x: self.sample(x, n_samples=n_samples), in_dims=0, out_dims=0, chunk_size=chunk_size, randomness="different")
+
+        points = sampling(images)
+
+        return points
+    
+    def sample(self, image: Tensor, n_samples: int = 1000) -> Tuple[Tensor, Tensor]:
+        """
+        Sample the likelihood of the keypoints from the model.
+        
+        Args:
+            image (Tensor): The image to sample from (1, C, H, W)
+            n_samples (int): The number of samples to draw
+            
+        Returns:
+            Tuple[Tensor, Tensor]: The x and y coordinates of the samples
+        """
+        if len(image.shape) == 3:
+            image = image.unsqueeze(0)
+
+        likelihood, xx, yy = self.get_likelihood(image)
+        # likelihood = likelihood.cpu().numpy()
+        # xx = xx.cpu().numpy()
+        # yy = yy.cpu().numpy()
+
+        points = []
+        likelihood = likelihood.squeeze()
+
+        # Loop over keypoints
+        for i in range(self.n_keypoints):
+            l = likelihood[i, :, :]
+            # sample = np.random.choice(
+                # a = np.arange(0, len(l.flatten())), 
+                # size = n_samples, 
+                # p = l.flatten(), 
+                # replace=True
+                # )
+            
+            # sample_x_idx, sample_y_idx = np.unravel_index(sample, l.shape)
+            # sample_x, sample_y = xx[sample_x_idx, sample_y_idx], yy[sample_x_idx, sample_y_idx]
+
+            samples = torch.multinomial(l.flatten(), n_samples, replacement=True)
+            sample_x_idx, sample_y_idx = torch.unravel_index(samples, l.shape)
+            sample_x, sample_y = xx[sample_x_idx, sample_y_idx], yy[sample_x_idx, sample_y_idx]
+
+            points.append(torch.stack([sample_x, sample_y], dim=1))
+
+        return torch.stack(points, dim=1)
+    
+    def get_likelihood(self, image: Tensor, n_points: int = 224) -> Tuple[Tensor, Tensor, Tensor]:
+
+        if n_points is None:
+            n_points = image.shape[-1]
 
         # Create a grid of points over the image
-        x = torch.linspace(0, 1, image.shape[-1])
-        y = torch.linspace(0, 1, image.shape[-2])
+        x = torch.linspace(0, 1, n_points, device=image.device)
+        y = torch.linspace(0, 1, n_points, device=image.device)
         xx, yy = torch.meshgrid(x, y)
         points = torch.stack([yy.flatten(), xx.flatten()], dim=1).to(image.device) # (H * W, 2)
 
         output = self(image) # VertebraOutputs (mu, sigma) for each keypoint (B, K, 2), (B, K, 2)
-
-        # Get the negative log-likelihood of the points
         loss = self.rle.inference(output.keypoints.mu, output.keypoints.sigma, points) # (B x H x W, K)
-        
-        # Reshape the loss to the original image shape
-        loss = loss.reshape(image.shape[0], -1, image.shape[-2], image.shape[-1]) # (B, K, H, W)
+        likelihood = (-loss).exp() / (-loss).exp().sum(dim=(-1,-2),keepdims=True)
 
-        # Return the likelihood
-        return (-loss).exp()
+        return likelihood, xx, yy
+
+
+    def visualize_uncertainty(self, image: Tensor) -> Tensor:
+
+        likelihood, xx, yy = self.get_likelihood(image)
+        mycmap = transparent_cmap(plt.cm.Reds)
+
+        # Plot the likelihood of the points
+        f, ax = plt.subplots(1, 1, figsize=(10, 10))
+
+        ax.imshow(image[0].squeeze().cpu().numpy(), cmap="gray")
+
+        for keypoint in range(self.n_keypoints):
+            ax.contourf(
+                xx.numpy()*image.shape[-1],
+                yy.numpy()*image.shape[-2],
+                likelihood[keypoint, :, :].squeeze().cpu().numpy(),
+                15,
+                cmap=mycmap,
+                vmin=0,
+                vmax=likelihood[keypoint, :, :].max().item()
+            )
+
     
     def training_step(self, batch: Batch, batch_idx: int) -> Dict[str, Tensor]:
         output = self.step(batch, batch_idx, name="train_stage", prog_bar=False, on_epoch=True, on_step=True, batch_size=batch.x.shape[0])
@@ -481,10 +596,10 @@ class SingleVertebraClassifier(L.LightningModule):
         
         if preds.shape[-1] == 4:
             all_groups =[
-                ("normal", ([0, ], [1, 2, 3])),
-                ("mild",([1, ], [0, 2, 3])),
-                ("moderate",([2, ], [0, 1, 3])),
-                ("severe",([3, ], [0, 1, 2])),
+                ("normal", ([0], [1, 2, 3])),
+                ("mild",([1], [0, 2, 3])),
+                ("moderate",([2], [0, 1, 3])),
+                ("severe",([3], [0, 1, 2])),
                 ("normal+mild",([0, 1], [2, 3])),
             ]
         elif preds.shape[-1] == 3:
@@ -499,6 +614,7 @@ class SingleVertebraClassifier(L.LightningModule):
         for group_name, groups in all_groups:
             # Compute ROC curve for a multi-class classification problem using the One-vs-Rest (OvR) strategy
             trues_binary, preds_grouped = grouped_classes(trues, preds, groups, n_classes=preds.shape[-1])
+            # print(trues_binary.sum(), group_name)
 
             roc = grouped_roc_ovr(trues, preds, groups, n_classes=preds.shape[-1])
             
@@ -518,7 +634,7 @@ class SingleVertebraClassifier(L.LightningModule):
             accuracy    = (cm[0, 0] + cm[1, 1]) / cm.sum()
 
             # Get the prevalence of the positive class
-            prevalence = trues_binary.sum()  
+            prevalence = len(trues_binary) - trues_binary.sum()  
 
             f1_score    = 2 * (precision * sensitivity) / (precision + sensitivity)
 
